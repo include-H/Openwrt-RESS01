@@ -152,6 +152,9 @@ jobs:
         run: |
           cd ./wrt/
 
+          #注入首启自定义配置（LAN静态IP/DNS/关闭LAN DHCPv4v6/dnsmasq参数）
+          install -m 0755 $GITHUB_WORKSPACE/Config/uci-defaults/990_custom.sh ./target/linux/qualcommax/base-files/etc/uci-defaults/990_custom.sh
+
           cat $GITHUB_WORKSPACE/Config/$WRT_CONFIG.txt >> .config
 
           $GITHUB_WORKSPACE/Scripts/Settings.sh
