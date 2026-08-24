@@ -6,7 +6,9 @@
 
 ## 源码仓库
 
-构建时自动 clone 最新代码，修改位置：`.github/workflows/RE-SS-01.yml` 顶部 `env` 段
+构建时自动 clone 上游公开仓库的最新代码（`VIKINGYFY/immortalwrt` main 分支），无需本地维护源码。
+
+如需更换，修改 `.github/workflows/RE-SS-01.yml` 顶部 `env` 段：
 
 ```yaml
 WRT_REPO: https://github.com/xxx/immortalwrt.git
