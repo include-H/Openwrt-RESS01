@@ -2,7 +2,9 @@
 CONFIG_TARGET_qualcommax=y
 CONFIG_TARGET_qualcommax_ipq60xx=y
 #设备列表（只保留RE-SS-01）
-CONFIG_TARGET_DEVICE_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y
+CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_jdcloud_re-ss-01=y
+#关闭默认选中的首个设备
+# CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_8devices_mango-dvk is not set
 #NSS硬件加速
 CONFIG_PACKAGE_kmod-qca-nss-drv=y
 CONFIG_PACKAGE_kmod-qca-nss-dp=y
@@ -29,7 +31,9 @@ CONFIG_PACKAGE_kmod-qca-nss-drv-vxlanmgr=y
 #自定义软件包
 CONFIG_PACKAGE_bash=y
 CONFIG_PACKAGE_curl=y
+CONFIG_PACKAGE_easytier=y
 CONFIG_PACKAGE_ip-tiny=y
+CONFIG_PACKAGE_luci-app-easytier=y
 CONFIG_PACKAGE_kmod-crypto-cbc=y
 CONFIG_PACKAGE_kmod-crypto-cts=y
 CONFIG_PACKAGE_kmod-crypto-des=y
