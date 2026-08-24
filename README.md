@@ -55,6 +55,5 @@ WRT_BRANCH: main
 .github/workflows/RE-SS-01.yml   # 构建流程：环境→拉源码→缓存→feeds→定制→编译→发布
 Config/RESS01.txt                # 编译配置：设备 + NSS + 自定义包
 Scripts/Settings.sh              # 注入默认值：主机名/IP/WIFI/主题 + 追加配置
-Scripts/Packages.sh              # 拉取第三方包（argon 主题）
-Scripts/Handles.sh               # 插件修补（argon 主题配色）
+Scripts/Packages.sh              # 拉取第三方包（easytier）
 ```

@@ -42,5 +42,4 @@ UPDATE_PACKAGE() {
 }
 
 # UPDATE_PACKAGE "包名" "项目地址" "项目分支" "pkg/name，可选" "同名旧包列表，可选"
-UPDATE_PACKAGE "argon" "sbwml/luci-theme-argon" "openwrt-25.12"
 UPDATE_PACKAGE "easytier" "EasyTier/luci-app-easytier" "main"
