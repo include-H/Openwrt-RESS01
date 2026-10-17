@@ -17,7 +17,7 @@ WRT_BRANCH: main
 
 ## 触发方式
 
-- **自动**：每天早上 5 点（北京时间）
+- **自动**：每周一早上 5 点（北京时间）
 - **手动**：Actions → RE-SS-01 → Run workflow
   - `PACKAGE`：临时追加插件包，每行一个，如 `CONFIG_PACKAGE_luci-app-xxx=y`
   - `TEST`：勾选后只输出配置文件，不编译固件
