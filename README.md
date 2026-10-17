@@ -27,6 +27,10 @@ WRT_BRANCH: main
 - 固件：`openwrt-qualcommax-ipq60xx-jdcloud_re-ss-01-*-分支-wifi-yes-日期.bin`
 - 完整编译配置：`Config-RESS01-*` 文本文件
 
+Release 说明里还会带上「本次构建变更」：对比上一次构建，列出**固件源码**、**各软件包源（feeds）**、**本 CI 仓库**的提交标题列表（每节最多 50 条，超出折叠省略）。
+
+对比用的基线版本记录在 Release 说明末尾的隐藏注释里（页面上不显示），不需要额外维护状态文件。
+
 ## 默认设置
 
 | 项目 | 默认值 |
