@@ -6,9 +6,9 @@ name: RE-SS-01
 
 #CI计划
 on:
-  #自动编译：每天早上5点（北京时间，UTC 21点）
+  #自动编译：每周一早上5点（北京时间，UTC 周日21点）
   schedule:
-    - cron: "0 21 * * *"
+    - cron: "0 21 * * 0"
   #手动编译
   workflow_dispatch:
     inputs:
@@ -55,10 +55,51 @@ jobs:
       WRT_PACKAGE: ${{inputs.PACKAGE}}
       #仅输出配置文件
       WRT_TEST: ${{inputs.TEST}}
+      #变更日志中每个小节最多列出的提交数
+      WRT_LOG_LIMIT: 50
 
     steps:
       - name: Checkout CI
         uses: actions/checkout@main
+        with:
+          #需要完整历史，用于对比本次 CI 配置/脚本的改动
+          fetch-depth: 0
+
+      - name: Record Previous Build
+        run: |
+          #读取上一次成功构建（Release 说明里带隐藏状态块）写入的源码/feeds/CI 版本
+          rm -f ./prev-state.txt ./prev-body.tmp
+
+          PREV_TAG=""
+          PREV_DATE=""
+          read -r PREV_TAG PREV_DATE <<<"$(gh release list -R "$GITHUB_REPOSITORY" -L 1 --json tagName,createdAt --jq '.[0] | "\(.tagName) \(.createdAt)"' 2>/dev/null || true)" || true
+
+          if [ -n "$PREV_TAG" ]; then
+            echo "上次构建：$PREV_TAG（$PREV_DATE）"
+            gh release view "$PREV_TAG" -R "$GITHUB_REPOSITORY" --json body --jq '.body' > ./prev-body.tmp 2>/dev/null || true
+            if [ -s ./prev-body.tmp ]; then
+              sed -n '/<!-- BUILD-STATE-START/,/BUILD-STATE-END -->/p' ./prev-body.tmp > ./prev-state.txt
+              if [ ! -s ./prev-state.txt ]; then
+                #兼容没有状态块的旧 Release 说明：正文里的短 hash
+                sed -n 's/.*提交：\([0-9a-fA-F]\{7,40\}\).*/WRT_HASH=\1/p' ./prev-body.tmp | head -1 > ./prev-state.txt
+              fi
+            fi
+          else
+            echo "未找到历史 Release。"
+          fi
+
+          if [ ! -s ./prev-state.txt ]; then
+            : > ./prev-state.txt
+            echo "本次作为基线，无变更对比。"
+          fi
+
+          echo "PREV_WRT_HASH=$(sed -n 's/^WRT_HASH=//p' ./prev-state.txt | head -1)" >> $GITHUB_ENV
+          echo "PREV_CI_SHA=$(sed -n 's/^CI_SHA=//p' ./prev-state.txt | head -1)" >> $GITHUB_ENV
+          echo "PREV_DATE=$PREV_DATE" >> $GITHUB_ENV
+
+          echo "===== 上次状态 ====="
+          cat ./prev-state.txt
+          echo "===================="
 
       - name: Initialization Environment
         env:
@@ -84,7 +125,27 @@ jobs:
           git clone --depth=1 --single-branch --branch $WRT_BRANCH $WRT_REPO ./wrt/
 
           cd ./wrt/ && echo "WRT_HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
+          echo "WRT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
           echo "WRT_INFO=$(basename $WRT_REPO .git)" >> $GITHUB_ENV
+
+          #按需加深历史，让上次构建的提交重新可达，用于生成变更日志
+          if [ -n "$PREV_WRT_HASH" ] && ! git cat-file -e "${PREV_WRT_HASH}^{commit}" 2>/dev/null; then
+            SINCE=""
+            if [ -n "$PREV_DATE" ]; then
+              SINCE=$(date -u -d "$PREV_DATE - 1 day" +%Y-%m-%d 2>/dev/null || true)
+            fi
+            if [ -n "$SINCE" ]; then
+              echo "拉取历史：--shallow-since=$SINCE"
+              git fetch --shallow-since="$SINCE" origin "$WRT_BRANCH" >/dev/null 2>&1 || true
+            fi
+            if ! git cat-file -e "${PREV_WRT_HASH}^{commit}" 2>/dev/null; then
+              echo "拉取历史：--deepen=3000"
+              git fetch --deepen=3000 origin "$WRT_BRANCH" >/dev/null 2>&1 || true
+            fi
+            if ! git cat-file -e "${PREV_WRT_HASH}^{commit}" 2>/dev/null; then
+              echo "历史不可用，变更日志将只记录 hash 变化。"
+            fi
+          fi
 
       - name: Initialization Values
         run: |
@@ -141,6 +202,151 @@ jobs:
 
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+
+      - name: Collect Changes
+        run: |
+          cd "$GITHUB_WORKSPACE"
+
+          CHANGES="./changes.md"
+          STATE="./build-state.txt"
+          LIMIT="${WRT_LOG_LIMIT:-50}"
+
+          prev_get() {
+            sed -n "s/^$1=//p" ./prev-state.txt 2>/dev/null | head -1
+          }
+
+          #输出：标题 + $2（提交列表文件），$1=小节名称，$3=from，$4=to
+          emit_log() {
+            local NAME=$1 LIST=$2 FROM=$3 TO=$4 N
+            N=$(wc -l < "$LIST" | tr -d ' ')
+            printf '**%s**：`%s` → `%s`，共 **%s** 个提交\n\n' "$NAME" "${FROM:0:7}" "${TO:0:7}" "$N" >> "$CHANGES"
+            {
+              echo "<details><summary>展开提交列表</summary>"
+              echo ""
+              echo '```'
+              head -n "$LIMIT" "$LIST"
+              if [ "$N" -gt "$LIMIT" ]; then
+                echo "... 另有 $((N - LIMIT)) 个提交未列出"
+              fi
+              echo '```'
+              echo ""
+              echo "</details>"
+              echo ""
+            } >> "$CHANGES"
+          }
+
+          : > "$CHANGES"
+          {
+            echo ""
+            echo "---"
+            echo ""
+            echo "### 📋 本次构建变更"
+            echo ""
+          } >> "$CHANGES"
+
+          PREV_SRC=$(prev_get WRT_HASH)
+          PREV_CI=$(prev_get CI_SHA)
+          HAS_PREV="no"
+          CHANGED="no"
+          if [ -s ./prev-state.txt ]; then
+            HAS_PREV="yes"
+          fi
+
+          #---------- 固件源码 ----------
+          if [ -n "$PREV_SRC" ] && [[ "$WRT_SHA" != "$PREV_SRC"* ]]; then
+            CHANGED="yes"
+            if git -C ./wrt cat-file -e "${PREV_SRC}^{commit}" 2>/dev/null; then
+              git -C ./wrt log --oneline --no-decorate "$PREV_SRC..HEAD" > /tmp/src-log.txt
+              if [ -s /tmp/src-log.txt ]; then
+                emit_log "固件源码 $WRT_INFO@$WRT_BRANCH" /tmp/src-log.txt "$PREV_SRC" "$WRT_SHA"
+              else
+                printf '**固件源码**：`%s` → `%s`（无新增提交）\n\n' "${PREV_SRC:0:7}" "${WRT_SHA:0:7}" >> "$CHANGES"
+              fi
+            else
+              printf '**固件源码**：`%s` → `%s`（历史不可用，仅记录 hash 变化）\n\n' "${PREV_SRC:0:7}" "${WRT_SHA:0:7}" >> "$CHANGES"
+            fi
+          fi
+
+          #---------- feeds ----------
+          : > /tmp/feed-state.txt
+          : > /tmp/feed-changes.txt
+          for DIR in ./wrt/feeds/*/; do
+            FEED=$(basename "$DIR")
+            if [ ! -d "$DIR.git" ]; then
+              continue
+            fi
+
+            CUR=$(git -C "$DIR" rev-parse HEAD 2>/dev/null || true)
+            if [ -z "$CUR" ]; then
+              continue
+            fi
+            printf 'FEED_%s=%s\n' "$FEED" "$CUR" >> /tmp/feed-state.txt
+
+            PREV_FEED=$(prev_get "FEED_$FEED")
+            if [ -z "$PREV_FEED" ] || [ "$PREV_FEED" = "$CUR" ]; then
+              continue
+            fi
+            CHANGED="yes"
+
+            if ! git -C "$DIR" cat-file -e "${PREV_FEED}^{commit}" 2>/dev/null; then
+              git -C "$DIR" fetch --deepen=500 origin >/dev/null 2>&1 || true
+            fi
+
+            if git -C "$DIR" cat-file -e "${PREV_FEED}^{commit}" 2>/dev/null; then
+              git -C "$DIR" log --oneline --no-decorate "$PREV_FEED..HEAD" > /tmp/feed-log.txt
+              if [ -s /tmp/feed-log.txt ]; then
+                emit_log "feeds/$FEED" /tmp/feed-log.txt "$PREV_FEED" "$CUR" >> /tmp/feed-changes.txt
+              else
+                printf '**feeds/%s**：`%s` → `%s`（无新增提交）\n\n' "$FEED" "${PREV_FEED:0:7}" "${CUR:0:7}" >> /tmp/feed-changes.txt
+              fi
+            else
+              printf '**feeds/%s**：`%s` → `%s`（历史不可用，仅记录 hash 变化）\n\n' "$FEED" "${PREV_FEED:0:7}" "${CUR:0:7}" >> /tmp/feed-changes.txt
+            fi
+          done
+
+          if [ -s /tmp/feed-changes.txt ]; then
+            {
+              echo "**软件包源**"
+              echo ""
+              cat /tmp/feed-changes.txt
+            } >> "$CHANGES"
+          fi
+
+          #---------- CI 仓库（配置/脚本） ----------
+          if [ -n "$PREV_CI" ] && [ "$PREV_CI" != "$GITHUB_SHA" ]; then
+            CHANGED="yes"
+            if git cat-file -e "${PREV_CI}^{commit}" 2>/dev/null; then
+              git log --oneline --no-decorate "$PREV_CI..HEAD" > /tmp/ci-log.txt
+              if [ -s /tmp/ci-log.txt ]; then
+                emit_log "CI 配置 $GITHUB_REPOSITORY" /tmp/ci-log.txt "$PREV_CI" "$GITHUB_SHA"
+              fi
+            else
+              printf '**CI 配置**：`%s` → `%s`（历史不可用）\n\n' "${PREV_CI:0:7}" "${GITHUB_SHA:0:7}" >> "$CHANGES"
+            fi
+          fi
+
+          if [ "$CHANGED" = "no" ]; then
+            if [ "$HAS_PREV" = "yes" ]; then
+              echo "本次没有检测到上游变更（源码 / feeds / CI 配置均未更新）。" >> "$CHANGES"
+            else
+              echo "本次为首次记录基线，未生成变更对比。" >> "$CHANGES"
+            fi
+            echo "" >> "$CHANGES"
+          fi
+
+          #---------- 供下次构建对比的隐藏状态 ----------
+          {
+            echo "<!-- BUILD-STATE-START"
+            printf 'WRT_HASH=%s\n' "$WRT_SHA"
+            printf 'CI_SHA=%s\n' "$GITHUB_SHA"
+            cat /tmp/feed-state.txt
+            echo "BUILD-STATE-END -->"
+          } > "$STATE"
+
+          echo "===== 变更日志 ====="
+          cat "$CHANGES"
+          echo "===== 状态 ====="
+          cat "$STATE"
 
       - name: Custom Packages
         run: |
@@ -216,27 +422,27 @@ jobs:
             make clean -j$(nproc)
           fi
 
+      - name: Build Release Body
+        run: |
+          cd "$GITHUB_WORKSPACE"
+
+          {
+            printf '%s\n' "RE-SS-01 单设备固件包，内含NSS硬件加速！" "不要问，刷就完事了！" ""
+            printf '%s\n' "源码：$WRT_REPO" "分支：$WRT_BRANCH" "提交：$WRT_HASH" ""
+            printf '%s\n' "配置：$WRT_CONFIG" "平台：$WRT_TARGET" ""
+            printf '%s\n' "登录地址：$WRT_IP" "登录密码：$WRT_PW" ""
+            printf '%s\n' "WIFI名称：$WRT_SSID" "WIFI密码：$WRT_WORD" ""
+            printf '%s\n' "内核版本：$WRT_KVER" "插件列表：$WRT_LIST" ""
+            cat ./changes.md 2>/dev/null || true
+            cat ./build-state.txt 2>/dev/null || true
+          } > ./release-body.md
+
+          echo "===== Release 说明 ====="
+          cat ./release-body.md
+
       - name: Release Firmware
         uses: softprops/action-gh-release@master
         with:
           tag_name: ${{env.WRT_CONFIG}}-${{env.WRT_INFO}}-${{env.WRT_BRANCH}}-${{env.WRT_DATE}}
           files: ./wrt/upload/*.*
-          body: |
-            RE-SS-01 单设备固件包，内含NSS硬件加速！
-            不要问，刷就完事了！
-
-            源码：${{env.WRT_REPO}}
-            分支：${{env.WRT_BRANCH}}
-            提交：${{env.WRT_HASH}}
-
-            配置：${{env.WRT_CONFIG}}
-            平台：${{env.WRT_TARGET}}
-
-            登录地址：${{env.WRT_IP}}
-            登录密码：${{env.WRT_PW}}
-
-            WIFI名称：${{env.WRT_SSID}}
-            WIFI密码：${{env.WRT_WORD}}
-
-            内核版本：${{env.WRT_KVER}}
-            插件列表：${{env.WRT_LIST}}
+          body_path: ./release-body.md
